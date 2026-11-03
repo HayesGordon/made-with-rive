@@ -63,6 +63,8 @@ The menu bar icon has moods, colours, the home corner and Reload Spider. Shortcu
 
 Limits: primary display only, and the real arrow stays visible.
 
+The app uses `RiveView`, which RiveRuntime marks deprecated, on purpose. Each frame it reads where the script put the spider and moves its small view there between the advance and the draw, so the two always agree. The newer API reads values asynchronously, which would leave the view a frame behind the spider.
+
 ## Notes
 
 - A `--publish` of a project that is not linked to a Rive editor file is watermarked. Link it with `rive push` to remove the watermark.
