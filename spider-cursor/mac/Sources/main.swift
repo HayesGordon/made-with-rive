@@ -1,26 +1,26 @@
 import AppKit
 import RiveRuntime
 
-/// Calls `onAdvance` after every advance, before that frame is drawn.
-final class FollowingViewModel: RiveViewModel {
-    var onAdvance: (() -> Void)?
-
-    override func player(didAdvanceby seconds: Double, riveModel: RiveModel?) {
-        onAdvance?()
-    }
-}
-
 /// A menu-bar app that shows the spider on the primary display and feeds it
 /// the global mouse. The spider's brain is the same Luau the CLI player runs;
 /// this only passes the pointer, pulls the press triggers and keeps a small
 /// Rive view under the spider inside a screen-sized click-through window, so
 /// only that view is ever redrawn.
+@MainActor
 final class SpiderApp: NSObject, NSApplicationDelegate {
     private let rivPath: String
     private var statusItem: NSStatusItem!
     private var window: NSWindow!
-    private var viewModel: FollowingViewModel?
-    private var instance: RiveDataBindingViewModel.Instance?
+    private var worker: Worker?
+    private var loading: Task<Void, Never>?
+    private var view: RiveUIView?
+    private var rive: Rive?
+    private var instance: ViewModelInstance?
+    /// Where the script last drew the spider relative to, and the tasks
+    /// that hear it change.
+    private var origin = CGPoint.zero
+    private var following: [Task<Void, Never>] = []
+    private var displayLink: CADisplayLink?
     private var clickMonitor: Any?
     private var scrollMonitor: Any?
     private var scrolled = CGVector.zero
@@ -111,6 +111,8 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
         window.contentView = NSView(frame: CGRect(origin: .zero, size: screen.size))
         load()
         window.orderFrontRegardless()
+        displayLink = window.contentView?.displayLink(target: self, selector: #selector(tick(_:)))
+        displayLink?.add(to: .main, forMode: .common)
 
         // Mouse-down monitors need no Accessibility permission (only key
         // monitors do). The click itself has already gone to the app under
@@ -155,64 +157,98 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
             NSLog("spider: cannot read \(rivPath)")
             return
         }
-        do {
-            let file = try RiveFile(data: data, loadCdn: false)
-            let model = RiveModel(riveFile: file)
-            let vm = FollowingViewModel(model, stateMachineName: nil, fit: .layout, alignment: .topLeft,
-                                        autoPlay: true, artboardName: "Spider")
-            model.enableAutoBind { [weak self] instance in
-                self?.instance = instance
-                instance.numberProperty(fromPath: "viewSize")?.value = Float(spiderViewSize)
-                instance.numberProperty(fromPath: "sleepAfter")?.value = Float(self?.sleepAfter ?? 10)
-                instance.enumProperty(fromPath: "agent")?.value = self?.mode ?? agentModes[0].key
-                self?.applyHome()
-                self?.applyColors()
+        loading?.cancel()
+        loading = Task {
+            do {
+                let worker: Worker
+                if let existing = self.worker {
+                    worker = existing
+                } else {
+                    worker = try await Worker()
+                    self.worker = worker
+                }
+                let file = try await File(source: .data(data), worker: worker)
+                let artboard = try await file.createArtboard("Spider")
+                let instance = try await file.createViewModelInstance(.viewModelDefault(from: .artboardDefault(artboard)))
+                let machine = try await artboard.createStateMachine(binding: instance)
+                let rive = try await Rive(file: file, artboard: artboard, stateMachine: machine, fit: layoutFit())
+                show(rive, instance)
+            } catch {
+                NSLog("spider: cannot load \(rivPath): \(error)")
             }
-            vm.onAdvance = { [weak self] in
-                self?.followSpider()
-                self?.trackPointer()
-            }
-            viewModel?.riveView?.removeFromSuperview()
-            let view = SpiderView(model: model, autoPlay: true)
-            vm.setRiveView(view: view)
-            view.setPreferredFramesPerSecond(preferredFramesPerSecond: fps)
-            applyScale()
-            view.frame = CGRect(x: 0, y: 0, width: spiderViewSize, height: spiderViewSize)
-            window.contentView?.addSubview(view)
-            viewModel = vm
-            lastMouse = CGPoint(x: CGFloat.nan, y: .nan)
-            // The new view model's totals start at zero.
-            scrolled = .zero
-        } catch {
-            NSLog("spider: cannot load \(rivPath): \(error)")
         }
     }
 
-    /// Puts the view where the script just drew the spider relative to. The
-    /// script wrote that origin in the advance that just ran, and this frame
-    /// is drawn after this returns, so the two always match.
+    private func show(_ rive: Rive, _ instance: ViewModelInstance) {
+        following.forEach { $0.cancel() }
+        view?.removeFromSuperview()
+        self.rive = rive
+        self.instance = instance
+        set("viewSize", Float(spiderViewSize))
+        set("sleepAfter", Float(sleepAfter))
+        instance.setValue(of: EnumProperty(path: "agent"), to: mode)
+        applyHome()
+        applyColors()
+        let view = RiveUIView(rive: rive)
+        view.frameRate = .fps(fps)
+        view.frame = CGRect(x: 0, y: 0, width: spiderViewSize * scale, height: spiderViewSize * scale)
+        window.contentView?.addSubview(view)
+        self.view = view
+        // The script writes where it drew the spider relative to; the view
+        // follows as each value arrives, a frame or so after it was drawn.
+        following = [("originX", \CGPoint.x), ("originY", \CGPoint.y)].map { path, axis in
+            Task {
+                do {
+                    for try await value in instance.valueStream(of: NumberProperty(path: path)) {
+                        origin[keyPath: axis] = CGFloat(value)
+                        followSpider()
+                    }
+                } catch {}
+            }
+        }
+        lastMouse = CGPoint(x: CGFloat.nan, y: .nan)
+        // The new view model's totals start at zero.
+        scrolled = .zero
+    }
+
+    private func set(_ path: String, _ value: Float) {
+        instance?.setValue(of: NumberProperty(path: path), to: value)
+    }
+
+    private func fire(_ path: String) {
+        instance?.fire(trigger: TriggerProperty(path: path))
+    }
+
+    /// The artboard keeps its size in its own units; the view shows each
+    /// unit as `scale` points.
+    private func layoutFit() -> Fit {
+        .layout(scaleFactor: .explicit(Float(window.backingScaleFactor * scale)))
+    }
+
+    /// Puts the view where the script last drew the spider relative to.
     private func followSpider() {
-        guard let instance, let view = viewModel?.riveView,
-              let x = instance.numberProperty(fromPath: "originX")?.value,
-              let y = instance.numberProperty(fromPath: "originY")?.value
-        else { return }
-        let frame = viewFrame(origin: CGPoint(x: CGFloat(x), y: CGFloat(y)), size: spiderViewSize,
-                              scale: scale, containerHeight: window.frame.height)
+        guard let view else { return }
+        let frame = viewFrame(origin: origin, size: spiderViewSize, scale: scale, containerHeight: window.frame.height)
         if view.frame != frame {
             view.frame = frame
         }
     }
 
+    @objc private func tick(_ link: CADisplayLink) {
+        trackPointer()
+    }
+
     /// Polled once a frame rather than monitored: a global mouse-moved monitor
     /// misses drags into other apps' windows, and the position needs no
-    /// permission. Takes effect in the next advance.
+    /// permission. Takes effect in the next advance after it reaches the
+    /// worker.
     private func trackPointer() {
         let mouse = NSEvent.mouseLocation
         guard mouse != lastMouse, let instance else { return }
         lastMouse = mouse
         let point = spiderPoint(viewPoint(global: mouse, screen: window.frame), scale: scale)
-        instance.numberProperty(fromPath: "pointerX")?.value = Float(point.x)
-        instance.numberProperty(fromPath: "pointerY")?.value = Float(point.y)
+        instance.setValue(of: NumberProperty(path: "pointerX"), to: Float(point.x))
+        instance.setValue(of: NumberProperty(path: "pointerY"), to: Float(point.y))
     }
 
     /// Running totals: the script takes the difference whenever they change,
@@ -222,30 +258,30 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
         trackPointer()
         scrolled.dx += travel.dx
         scrolled.dy += travel.dy
-        instance.numberProperty(fromPath: "scrollX")?.value = Float(scrolled.dx)
-        instance.numberProperty(fromPath: "scrollY")?.value = Float(scrolled.dy)
+        instance.setValue(of: NumberProperty(path: "scrollX"), to: Float(scrolled.dx))
+        instance.setValue(of: NumberProperty(path: "scrollY"), to: Float(scrolled.dy))
     }
 
     private func scrollEnded() {
-        instance?.triggerProperty(fromPath: "scrollEnd")?.trigger()
+        fire("scrollEnd")
     }
 
     private func press(left: Bool) {
         // Bring the pointer up to date first: the press lands where the
         // spider last saw it.
         trackPointer()
-        instance?.triggerProperty(fromPath: left ? "pressLeft" : "pressRight")?.trigger()
+        fire(left ? "pressLeft" : "pressRight")
     }
 
     /// Tells the spider whether it is home, and where home is in its space.
     private func applyHome() {
         guard let instance, let screen = NSScreen.screens.first else { return }
         let spot = homeSpot(corner: homeCorner, visible: screen.visibleFrame, screen: screen.frame, scale: scale)
-        instance.numberProperty(fromPath: "homeX")?.value = Float(spot.hub.x)
-        instance.numberProperty(fromPath: "homeY")?.value = Float(spot.hub.y)
-        instance.numberProperty(fromPath: "cornerX")?.value = Float(spot.corner.x)
-        instance.numberProperty(fromPath: "cornerY")?.value = Float(spot.corner.y)
-        instance.booleanProperty(fromPath: "home")?.value = home
+        set("homeX", Float(spot.hub.x))
+        set("homeY", Float(spot.hub.y))
+        set("cornerX", Float(spot.corner.x))
+        set("cornerY", Float(spot.corner.y))
+        instance.setValue(of: BoolProperty(path: "home"), to: home)
     }
 
     @objc private func toggleHome() {
@@ -265,7 +301,7 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
         guard on != dragging else { return }
         dragging = on
         trackPointer()
-        instance?.booleanProperty(fromPath: "dragging")?.value = on
+        instance?.setValue(of: BoolProperty(path: "dragging"), to: on)
     }
 
     /// The window under the pointer, in the window server's space (y down
@@ -291,8 +327,7 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
         var colors = (palettes.first { $0.name == paletteName } ?? palettes[0]).colors
         colors["rim"] = rimColor(rimOn)
         for (slot, argb) in colors {
-            let c = channels(argb)
-            instance.colorProperty(fromPath: slot)?.set(red: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
+            instance.setValue(of: ColorProperty(path: slot), to: Color(argb))
         }
     }
 
@@ -329,14 +364,14 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
     private func setMode(_ key: String) {
         mode = key
         updateMenu()
-        instance?.enumProperty(fromPath: "agent")?.value = key
+        instance?.setValue(of: EnumProperty(path: "agent"), to: key)
     }
 
     @objc private func chooseSleep(_ item: NSMenuItem) {
         sleepAfter = item.tag
         UserDefaults.standard.set(sleepAfter, forKey: "sleepAfter")
         updateMenu()
-        instance?.numberProperty(fromPath: "sleepAfter")?.value = Float(sleepAfter)
+        set("sleepAfter", Float(sleepAfter))
     }
 
     @objc private func chooseSize(_ item: NSMenuItem) {
@@ -346,11 +381,8 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
         applyScale()
     }
 
-    /// The artboard keeps its size in its own units; the view shows each unit
-    /// as `scale` points.
     private func applyScale() {
-        guard let vm = viewModel else { return }
-        vm.layoutScaleFactor = Double(window.backingScaleFactor * scale)
+        rive?.fit = layoutFit()
         followSpider()
         // Home is in the spider's space, which just changed.
         applyHome()
@@ -362,7 +394,7 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
         fps = item.tag
         UserDefaults.standard.set(fps, forKey: "fps")
         updateMenu()
-        viewModel?.riveView?.setPreferredFramesPerSecond(preferredFramesPerSecond: fps)
+        view?.frameRate = .fps(fps)
     }
 
     @objc private func choosePalette(_ item: NSMenuItem) {
@@ -398,8 +430,10 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
 let rivPath = CommandLine.arguments.dropFirst().first
     ?? Bundle.main.path(forResource: "spider", ofType: "riv")
     ?? "spider.riv"
-let app = NSApplication.shared
-let delegate = SpiderApp(rivPath: rivPath)
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = SpiderApp(rivPath: rivPath)
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    app.run()
+}

@@ -52,16 +52,14 @@ check(window.collectionBehavior.contains(.fullScreenAuxiliary), "the overlay sho
 check(window.frame == primary, "the overlay covers the screen")
 
 // Palettes.
-// The runtime's colour setter takes 0-1 channels and clamps anything above,
-// whatever its header comment says, so 0-255 values paint white.
-let c = channels(0x807A55B8)
-check(c.red == 122.0 / 255 && c.green == 85.0 / 255 && c.blue == 184.0 / 255 && c.alpha == 128.0 / 255,
-      "AARRGGBB splits into 0-1 channels")
+// The palettes are written 0xAARRGGBB, as the runtime's Color reads them.
+let c = Color(0x807A55B8)
+check(c.alpha == 0x80 && c.red == 0x7A && c.green == 0x55 && c.blue == 0xB8, "Color reads 0xAARRGGBB")
 check(Set(palettes.map(\.name)).count == palettes.count, "palette names are unique")
 for palette in palettes {
     check(Set(palette.colors.keys) == Set(paletteSlots), "\(palette.name) sets exactly every slot")
 }
-check(channels(rimColor(false)).alpha == 0 && channels(rimColor(true)).alpha == 1, "the rim toggles visibility")
+check(Color(rimColor(false)).alpha == 0 && Color(rimColor(true)).alpha == 0xFF, "the rim toggles visibility")
 
 // Every slot the menu sets must be a colour the scene binds, or a palette
 // silently does nothing. The scene's path is the first argument.
@@ -84,11 +82,13 @@ if let scenePath = CommandLine.arguments.dropFirst().first,
 
 // AppKit asks a view to update its tracking areas whenever it moves, which
 // for the spider's view is every frame.
-let spiderView = SpiderView()
-for _ in 0..<10 {
-    spiderView.updateTrackingAreas()
+MainActor.assumeIsolated {
+    let spiderView = RiveUIView(rive: nil)
+    for _ in 0..<10 {
+        spiderView.updateTrackingAreas()
+    }
+    check(spiderView.trackingAreas.count <= 1, "moving the spider's view does not pile up tracking areas")
 }
-check(spiderView.trackingAreas.isEmpty, "moving the spider's view does not pile up tracking areas")
 
 // Frame rate: a saved choice, or the display's full rate when none is saved
 // (UserDefaults answers 0) or it is not one the menu offers.

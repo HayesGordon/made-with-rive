@@ -26,7 +26,7 @@ fi
 test -d "$FRAMEWORKS/RiveRuntime.framework"
 
 swiftc -O -F "$FRAMEWORKS" -framework RiveRuntime -Xlinker -rpath -Xlinker "$FRAMEWORKS" \
-    "$HERE/Sources/Overlay.swift" "$HERE/Sources/Palette.swift" "$HERE/Sources/SpiderView.swift" \
+    "$HERE/Sources/Overlay.swift" "$HERE/Sources/Palette.swift" \
     "$HERE/Tests/main.swift" -o "$OUT/overlay_tests"
 "$OUT/overlay_tests" "$HERE/../scene.rml"
 

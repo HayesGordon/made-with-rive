@@ -36,10 +36,3 @@ let palettes: [Palette] = [
 func rimColor(_ on: Bool) -> UInt32 {
     on ? 0xFFFFFFFF : 0x00FFFFFF
 }
-
-/// 0xAARRGGBB as 0-1 channels, which is what the colour property's setter
-/// takes (it clamps to 1, so 0-255 values all paint white).
-func channels(_ argb: UInt32) -> (red: Double, green: Double, blue: Double, alpha: Double) {
-    func unit(_ shift: UInt32) -> Double { Double((argb >> shift) & 0xFF) / 255 }
-    return (unit(16), unit(8), unit(0), unit(24))
-}
