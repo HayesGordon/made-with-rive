@@ -8,7 +8,7 @@ A cartoon spider, Silk, that crawls after your pointer. It walks on eight IK leg
 
 It runs in three places:
 
-- **Silkworks**, a full-page web app Silk lives in, with buttons, a scrolling list and a sticky note to drag about. This is what `rive .` opens.
+- **Silkworks**, a full-page web app Silk lives in, with buttons, a scrolling list and a sticky note to drag about. This is what `rive .` opens. [Try it in your browser](https://silkworks-x26tcq.rive.to).
 - **Desktop**, a smaller test rig with a draggable window: `rive . --artboard=Desktop`.
 - **A macOS app** that puts Silk on your real desktop, following the system pointer. See [mac](#macos-app).
 
