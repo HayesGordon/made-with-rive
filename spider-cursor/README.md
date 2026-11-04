@@ -2,6 +2,8 @@
 
 A cartoon spider, Silk, that crawls after your pointer. It walks on eight IK legs, presses with a front leg when you click (left click, left leg; right click, right leg), drags its feet along when you scroll, and finds something to do when you keep still: grooming, wandering, spinning a little web, dozing. Send it home and it spins a web in the corner, drops on a thread and swings. Drag a window it is near and it holds on.
 
+**[Live demo: Silkworks](https://silkworks-x26tcq.rive.to)**, a web app Silk lives in. Runs in your browser.
+
 | Holding on to a dragged window | Home in its corner web, changing colour |
 |---|---|
 | ![Silk riding a Finder window as it is dragged](media/window.gif) | ![Silk in its web in the screen's corner, switching colours from the menu bar](media/home.gif) |
