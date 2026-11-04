@@ -11,7 +11,8 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
     private let rivPath: String
     private var statusItem: NSStatusItem!
     private var window: NSWindow!
-    private var worker: Worker?
+    /// One worker for the app's life, however many reloads start at once.
+    private lazy var worker = Task { try await Worker() }
     private var loading: Task<Void, Never>?
     private var view: RiveUIView?
     private var rive: Rive?
@@ -160,18 +161,14 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
         loading?.cancel()
         loading = Task {
             do {
-                let worker: Worker
-                if let existing = self.worker {
-                    worker = existing
-                } else {
-                    worker = try await Worker()
-                    self.worker = worker
-                }
+                let worker = try await self.worker.value
                 let file = try await File(source: .data(data), worker: worker)
                 let artboard = try await file.createArtboard("Spider")
                 let instance = try await file.createViewModelInstance(.viewModelDefault(from: .artboardDefault(artboard)))
                 let machine = try await artboard.createStateMachine(binding: instance)
                 let rive = try await Rive(file: file, artboard: artboard, stateMachine: machine, fit: layoutFit())
+                // A later reload replaced this one.
+                guard !Task.isCancelled else { return }
                 show(rive, instance)
             } catch {
                 NSLog("spider: cannot load \(rivPath): \(error)")
@@ -203,6 +200,8 @@ final class SpiderApp: NSObject, NSApplicationDelegate {
                         origin[keyPath: axis] = CGFloat(value)
                         followSpider()
                     }
+                } catch where !Task.isCancelled {
+                    NSLog("spider: stopped following \(path): \(error)")
                 } catch {}
             }
         }

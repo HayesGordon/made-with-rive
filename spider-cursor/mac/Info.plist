@@ -5,7 +5,7 @@
     <key>CFBundleExecutable</key>
     <string>SpiderCursor</string>
     <key>CFBundleIdentifier</key>
-    <string>app.rive.spider-cursor</string>
+    <string>com.gordonhayes.spider-cursor</string>
     <key>CFBundleName</key>
     <string>Spider Cursor</string>
     <key>CFBundlePackageType</key>
@@ -13,7 +13,7 @@
     <key>CFBundleShortVersionString</key>
     <string>0.1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.1</string>
+    <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
 </dict>

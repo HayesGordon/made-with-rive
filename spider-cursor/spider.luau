@@ -217,9 +217,8 @@ function advance(self: Brain, seconds: number): boolean
     end
 
     -- The artboard is a small view centred on the spider: draw relative to
-    -- its top left and tell the host where that is. Written in this advance,
-    -- so the bound nodes and the origin the host reads afterwards agree on
-    -- the same frame.
+    -- its top left and tell the host where that is, so the host can move
+    -- the view there.
     local size = if self.viewSize then self.viewSize.value else frame.SIZE
     local ox, oy = frame.origin(s.x, s.y, size)
     if w.mode == 'home' and w.homePhase ~= 'travel' and self.homeX and self.homeY and self.cornerX and self.cornerY then
